@@ -6,26 +6,29 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Transforms the navigation tree so that wherever a "column container"
- * node is found (an empty title/link structural node, which may appear
- * at level-2 directly under a level-1 item, or deeper e.g. level-3 under
- * an intermediate "Category" node), its heading children get distributed
- * into one or more new column containers capped at MAX_ITEMS_PER_COLUMN
- * total 2nd-child pages each.
+ * Transforms the navigation tree so that, for a given level-1 item, ALL of
+ * its level-4 pages (across every level-3 heading, across every original
+ * column container) are packed continuously into new columns capped at
+ * MAX_ITEMS_PER_COLUMN pages each.
  *
- * Two situations are handled once a column container is found:
- *
- *  1. Multiple headings that individually fit within the cap are packed
- *     together into a column (bin-packed, kept intact) until the next
- *     heading would push the running total over the cap - then a new
- *     column starts.
- *
- *  2. A SINGLE heading whose own children already exceed the cap (e.g.
- *     BarraCuda with 20 pages, cap 16) is split directly:
- *       - the first chunk (up to maxPerColumn pages) stays wrapped under
- *         a clone of the original heading (keeps its title/link),
- *       - any remaining chunk(s) become column(s) containing the bare
- *         pages directly, with NO heading wrapper.
+ * Key behaviors:
+ *  - Column containers can appear at any depth (level-2 directly under a
+ *    level-1 item, or deeper e.g. level-3 under an intermediate
+ *    "Category" node) - located recursively.
+ *  - If a level-1 item has MULTIPLE column containers, all their level-3
+ *    headings are combined into one continuous sequence before packing -
+ *    the column boundary is not restarted per original column container.
+ *  - Headings are packed in order. A heading that fits in the remaining
+ *    space of the current column is added whole, keeping its title.
+ *  - A heading that does not fully fit is split: the portion that fits
+ *    fills out the current column (still labeled with the heading's
+ *    title, since it's that heading's FIRST chunk), then a new column is
+ *    opened and the remainder continues - any chunk after the first for
+ *    the same heading is added WITHOUT a title (empty), since it's a
+ *    continuation, not a new heading.
+ *  - Packing keeps flowing across heading boundaries: once a heading is
+ *    exhausted, the next heading continues filling the same (still open)
+ *    column if there's remaining capacity.
  */
 public class NavigationColumnUtils {
 
@@ -40,129 +43,118 @@ public class NavigationColumnUtils {
         return emptyTitle && emptyLink;
     }
 
-    /**
-     * Counts the "2nd child" pages for a heading node, i.e. the heading's
-     * own children. If the heading has no children, it is itself treated
-     * as one page (counts as 1).
-     */
+    /** Returns a heading's own children (the level-4 pages), or null if it has none. */
     @SuppressWarnings("unchecked")
     private static List<HashMap<String, Object>> pagesOf(HashMap<String, Object> heading) {
         Object itemsObj = heading.get("items");
         return (itemsObj instanceof List) ? (List<HashMap<String, Object>>) itemsObj : null;
     }
 
-    private static int countSecondChildPages(HashMap<String, Object> heading) {
-        List<HashMap<String, Object>> pages = pagesOf(heading);
-        return (pages != null) ? pages.size() : 1;
-    }
-
-    /** Wraps a group of intact heading nodes into a single new column. */
-    private static HashMap<String, Object> buildColumnFromHeadings(List<HashMap<String, Object>> headings) {
+    /** Wraps a list of level-3 nodes (full headings, partial headings, or continuation chunks) into a new column. */
+    private static HashMap<String, Object> buildColumn(List<HashMap<String, Object>> level3Nodes) {
         HashMap<String, Object> column = new HashMap<>();
         column.put("title", "");
         column.put("link", "");
         column.put("target", false);
         column.put("displayLeftNavigation", false);
-        column.put("items", new ArrayList<>(headings));
+        column.put("items", new ArrayList<>(level3Nodes));
         return column;
     }
 
-    /** Wraps a group of bare pages (no heading) into a single new column. */
-    private static HashMap<String, Object> buildColumnFromPages(List<HashMap<String, Object>> pages) {
-        HashMap<String, Object> column = new HashMap<>();
-        column.put("title", "");
-        column.put("link", "");
-        column.put("target", false);
-        column.put("displayLeftNavigation", false);
-        column.put("items", new ArrayList<>(pages));
-        return column;
+    /** Builds a continuation node (no title) wrapping a chunk of pages. */
+    private static HashMap<String, Object> buildContinuationNode(List<HashMap<String, Object>> chunk) {
+        HashMap<String, Object> node = new HashMap<>();
+        node.put("title", "");
+        node.put("link", "");
+        node.put("target", false);
+        node.put("displayLeftNavigation", false);
+        node.put("items", chunk);
+        return node;
     }
 
     /**
-     * Splits a single oversized heading (its own page count > maxPerColumn)
-     * into one or more columns:
-     *  - first column: clone of the heading with only the first
-     *    maxPerColumn pages, so its title/link is preserved
-     *  - subsequent column(s): bare pages, no heading wrapper
+     * Continuously packs a flat, ordered sequence of level-3 headings into
+     * new columns, splitting any heading whose pages don't fully fit in
+     * the remaining space of the current column, and carrying leftover
+     * capacity forward into subsequent headings.
      */
-    private static List<HashMap<String, Object>> splitOversizedHeading(
-            HashMap<String, Object> heading, int maxPerColumn) {
-
-        List<HashMap<String, Object>> result = new ArrayList<>();
-        List<HashMap<String, Object>> pages = pagesOf(heading);
-        if (pages == null) {
-            // no children to split; treat the heading itself as a single page
-            result.add(buildColumnFromHeadings(new ArrayList<>(List.of(heading))));
-            return result;
-        }
-
-        boolean first = true;
-        for (int i = 0; i < pages.size(); i += maxPerColumn) {
-            List<HashMap<String, Object>> chunk =
-                    new ArrayList<>(pages.subList(i, Math.min(i + maxPerColumn, pages.size())));
-
-            if (first) {
-                HashMap<String, Object> headingClone = new HashMap<>(heading);
-                headingClone.put("items", chunk);
-                result.add(buildColumnFromHeadings(new ArrayList<>(List.of(headingClone))));
-                first = false;
-            } else {
-                result.add(buildColumnFromPages(chunk));
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Distributes heading nodes into one or more columns such that each
-     * column holds at most maxPerColumn total 2nd-child pages. Headings
-     * that individually fit are bin-packed and kept whole. A heading that
-     * alone exceeds the cap is split via splitOversizedHeading().
-     */
-    private static List<HashMap<String, Object>> distributeHeadingsIntoColumns(
+    private static List<HashMap<String, Object>> packHeadingsIntoColumns(
             List<HashMap<String, Object>> headings, int maxPerColumn) {
 
         List<HashMap<String, Object>> columns = new ArrayList<>();
-        List<HashMap<String, Object>> currentHeadings = new ArrayList<>();
+        List<HashMap<String, Object>> currentColumnItems = new ArrayList<>();
         int currentCount = 0;
 
         for (HashMap<String, Object> heading : headings) {
-            int headingCount = countSecondChildPages(heading);
+            List<HashMap<String, Object>> pages = pagesOf(heading);
 
-            if (headingCount > maxPerColumn) {
-                // flush whatever is pending, then split this heading on its own
-                if (!currentHeadings.isEmpty()) {
-                    columns.add(buildColumnFromHeadings(currentHeadings));
-                    currentHeadings = new ArrayList<>();
+            if (pages == null) {
+                // Leaf heading with no children - treat as a single unit.
+                if (!currentColumnItems.isEmpty() && currentCount + 1 > maxPerColumn) {
+                    columns.add(buildColumn(currentColumnItems));
+                    currentColumnItems = new ArrayList<>();
                     currentCount = 0;
                 }
-                columns.addAll(splitOversizedHeading(heading, maxPerColumn));
+                currentColumnItems.add(heading);
+                currentCount += 1;
                 continue;
             }
 
-            if (!currentHeadings.isEmpty() && currentCount + headingCount > maxPerColumn) {
-                columns.add(buildColumnFromHeadings(currentHeadings));
-                currentHeadings = new ArrayList<>();
-                currentCount = 0;
+            int totalPages = pages.size();
+            int offset = 0;
+            boolean first = true;
+
+            if (totalPages == 0) {
+                // Heading with an empty items list - keep it as-is, counts as 0.
+                currentColumnItems.add(new HashMap<>(heading));
+                continue;
             }
 
-            currentHeadings.add(heading);
-            currentCount += headingCount;
+            while (offset < totalPages) {
+                int capacityLeft = maxPerColumn - currentCount;
+                if (capacityLeft <= 0) {
+                    columns.add(buildColumn(currentColumnItems));
+                    currentColumnItems = new ArrayList<>();
+                    currentCount = 0;
+                    capacityLeft = maxPerColumn;
+                }
+
+                int take = Math.min(capacityLeft, totalPages - offset);
+                List<HashMap<String, Object>> chunk = new ArrayList<>(pages.subList(offset, offset + take));
+
+                HashMap<String, Object> node;
+                if (first) {
+                    // First chunk of this heading - keep its title/link/etc.
+                    node = new HashMap<>(heading);
+                    node.put("items", chunk);
+                } else {
+                    // Continuation of an already-started heading - no title.
+                    node = buildContinuationNode(chunk);
+                }
+
+                currentColumnItems.add(node);
+                currentCount += chunk.size();
+                offset += chunk.size();
+                first = false;
+            }
         }
 
-        if (!currentHeadings.isEmpty()) {
-            columns.add(buildColumnFromHeadings(currentHeadings));
+        if (!currentColumnItems.isEmpty()) {
+            columns.add(buildColumn(currentColumnItems));
         }
 
         return columns;
     }
 
     /**
-     * Recursively walks a list of sibling nodes. Whenever a column
-     * container is found, it is replaced by the one-or-more re-chunked
-     * columns built from its headings. Non-column nodes are kept as-is,
-     * with their own children recursively processed so column containers
-     * at any depth are found.
+     * Recursively walks a list of sibling nodes. All column containers
+     * found among the given siblings (there may be more than one) have
+     * their headings combined into a single continuous sequence, which is
+     * then packed into new columns via packHeadingsIntoColumns(). The new
+     * columns are inserted at the position of the first column container
+     * found; non-column siblings are kept in their original relative
+     * order, and recursed into so column containers at deeper levels
+     * (e.g. under an intermediate "Category" node) are also found.
      */
     @SuppressWarnings("unchecked")
     private static List<HashMap<String, Object>> processChildren(
@@ -173,12 +165,20 @@ public class NavigationColumnUtils {
             return result;
         }
 
+        List<HashMap<String, Object>> combinedHeadings = new ArrayList<>();
+        int firstColumnInsertIndex = -1;
+
         for (HashMap<String, Object> child : children) {
             if (isColumnContainer(child)) {
+                if (firstColumnInsertIndex == -1) {
+                    firstColumnInsertIndex = result.size();
+                }
                 Object headingsObj = child.get("items");
-                List<HashMap<String, Object>> headings =
-                        (headingsObj instanceof List) ? (List<HashMap<String, Object>>) headingsObj : new ArrayList<>();
-                result.addAll(distributeHeadingsIntoColumns(headings, maxPerColumn));
+                if (headingsObj instanceof List) {
+                    combinedHeadings.addAll((List<HashMap<String, Object>>) headingsObj);
+                }
+                // the original column container itself is dropped - it will
+                // be replaced by the newly packed columns below.
             } else {
                 HashMap<String, Object> clone = new HashMap<>(child);
                 Object nestedItemsObj = child.get("items");
@@ -189,14 +189,17 @@ public class NavigationColumnUtils {
             }
         }
 
+        if (!combinedHeadings.isEmpty()) {
+            List<HashMap<String, Object>> newColumns = packHeadingsIntoColumns(combinedHeadings, maxPerColumn);
+            result.addAll(firstColumnInsertIndex, newColumns);
+        }
+
         return result;
     }
 
     /**
      * Entry point: transforms the full navigation root map produced by
      * NavigationUtils.getNavigationItems() -&gt; { "items": [ ... ] }.
-     * Column containers are located recursively at whatever depth they
-     * occur.
      */
     @SuppressWarnings("unchecked")
     public static HashMap<String, Object> transformNavigation(
