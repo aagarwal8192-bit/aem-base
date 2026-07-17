@@ -32,7 +32,7 @@ public class NavigationColumnUtils {
 
     private static int countPages(HashMap<String, Object> heading) {
         List<HashMap<String, Object>> pages = pagesOf(heading);
-        return (pages != null) ? pages.size() : 1;
+        return (pages != null) ? pages.size() : 0;
     }
 
     private static HashMap<String, Object> buildColumn(List<HashMap<String, Object>> headings) {
@@ -56,12 +56,11 @@ public class NavigationColumnUtils {
             int headingCount = countPages(heading);
 
             if (headingCount > maxPerColumn) {
-                if (!currentColumnItems.isEmpty()) {
-                    columns.add(buildColumn(currentColumnItems));
-                    currentColumnItems = new ArrayList<>();
-                    currentCount = 0;
-                }
-                columns.add(buildColumn(new ArrayList<>(List.of(heading))));
+                currentColumnItems.add(heading);
+                currentCount += headingCount;
+                columns.add(buildColumn(currentColumnItems));
+                currentColumnItems = new ArrayList<>();
+                currentCount = 0;
                 continue;
             }
 
@@ -93,7 +92,7 @@ public class NavigationColumnUtils {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<HashMap<String, Object>> processChildren(
+    private static List<HashMap<String, Object>> processLevel2Children(
             List<HashMap<String, Object>> children, int maxPerColumn, boolean horizontal) {
 
         List<HashMap<String, Object>> result = new ArrayList<>();
@@ -114,12 +113,7 @@ public class NavigationColumnUtils {
                     combinedHeadings.addAll((List<HashMap<String, Object>>) headingsObj);
                 }
             } else {
-                HashMap<String, Object> clone = new HashMap<>(child);
-                Object nestedItemsObj = child.get("items");
-                if (nestedItemsObj instanceof List) {
-                    clone.put("items", processChildren((List<HashMap<String, Object>>) nestedItemsObj, maxPerColumn, horizontal));
-                }
-                result.add(clone);
+                result.add(child);
             }
         }
 
@@ -141,7 +135,7 @@ public class NavigationColumnUtils {
         Object itemsObj = level1Item.get("items");
         if (itemsObj instanceof List) {
             boolean horizontal = isHorizontal(level1Item);
-            clone.put("items", processChildren((List<HashMap<String, Object>>) itemsObj, maxPerColumn, horizontal));
+            clone.put("items", processLevel2Children((List<HashMap<String, Object>>) itemsObj, maxPerColumn, horizontal));
         }
         return clone;
     }
