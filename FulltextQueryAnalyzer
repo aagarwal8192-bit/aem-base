@@ -1,0 +1,62 @@
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class FulltextQueryFixer {
+
+    // Matches a quoted phrase or a single token
+    private static final Pattern TOKEN_PATTERN =
+        Pattern.compile("\"[^\"]+\"|\\S+");
+
+    /**
+     * Analyzes a QueryBuilder predicate map and rewrites any
+     * "fulltext"-type keys so all terms are required (AND),
+     * unless they're already using +/AND/OR operators.
+     */
+    public static Map<String, String> analyzeAndFix(Map<String, String> queryMap) {
+        for (String key : queryMap.keySet()) {
+            if (isFulltextKey(key)) {
+                String original = queryMap.get(key);
+                String fixed = enforceAnd(original);
+                queryMap.put(key, fixed);
+                System.out.println("[" + key + "] \"" + original + "\" -> \"" + fixed + "\"");
+            }
+        }
+        return queryMap;
+    }
+
+    private static boolean isFulltextKey(String key) {
+        // Matches "fulltext", "group.1_fulltext", "1_fulltext", etc.
+        return key.equals("fulltext") || key.endsWith("_fulltext") || key.endsWith(".fulltext");
+    }
+
+    private static String enforceAnd(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return value;
+        }
+
+        // Already has explicit operators? Leave it alone.
+        if (value.contains("+") || value.matches(".*\\bAND\\b.*") || value.matches(".*\\bOR\\b.*")) {
+            return value;
+        }
+
+        Matcher matcher = TOKEN_PATTERN.matcher(value.trim());
+        StringBuilder sb = new StringBuilder();
+
+        while (matcher.find()) {
+            String token = matcher.group();
+            token = sanitize(token);
+            sb.append("+").append(token).append(" ");
+        }
+
+        return sb.toString().trim();
+    }
+
+    private static String sanitize(String term) {
+        // Strip stray leading +/-/quotes that aren't a real phrase boundary
+        if (term.startsWith("\"") && term.endsWith("\"")) {
+            return term; // keep quoted phrases intact
+        }
+        return term.replaceAll("^[+\\-]+", "");
+    }
+}
