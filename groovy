@@ -1,100 +1,109 @@
-import com.day.cq.search.PredicateGroup
 import com.day.cq.search.QueryBuilder
+import com.day.cq.search.PredicateGroup
 import javax.jcr.Session
+import javax.jcr.Property
 
 def searchText = "Backup Plus"
 def searchTokens = searchText.toLowerCase().split("\\s+")
 
-def queryBuilder = getService(QueryBuilder)
-def session = resourceResolver.adaptTo(Session)
+Session session = resourceResolver.adaptTo(Session)
+QueryBuilder queryBuilder = getService(QueryBuilder)
 
-Map<String, String> map = [
-    "path"      : "/content/dam/seagate/brand-portal",
-    "type"      : "dam:Asset",
-    "fulltext"  : searchText,
-    "p.limit"   : "-1"
+Map<String, String> predicates = [
+        "path"     : "/content/dam/seagate/brand-portal",
+        "type"     : "dam:Asset",
+        "fulltext" : searchText,
+        "p.limit"  : "-1"
 ]
 
-def query = queryBuilder.createQuery(PredicateGroup.create(map), session)
-def result = query.result
+def query = queryBuilder.createQuery(PredicateGroup.create(predicates), session)
+def result = query.getResult()
 
-println "Hits: ${result.hits.size()}"
-println "===================================================="
+println "Total Hits : ${result.getHits().size()}"
+println "============================================================"
 
-def properties = [
-    "dc:title",
-    "dc:description",
-    "cq:tags",
-    "predictedTags",
-    "predictedTagsConfidence",
+result.getHits().each { hit ->
 
-    // Seagate metadata
-    "seagateKeywords",
-    "seagateBrand",
-    "seagateProduct",
-    "seagateProductType",
-    "seagateProductCategory",
-    "seagateNotes",
-    "seagateAssetCategory",
-    "seagateAssetType",
-    "jcr:title",
-    "jcr:description"
-]
+    def asset = session.getNode(hit.getPath())
 
-result.hits.each { hit ->
+    println "\nAsset : ${asset.getPath()}"
 
-    def asset = session.getNode(hit.path)
     boolean found = false
 
-    println "\nAsset : ${asset.path}"
-
     // Check asset name
-    def assetName = asset.name
+    String assetName = asset.getName()
+
     searchTokens.each { token ->
         if (assetName.toLowerCase().contains(token)) {
             found = true
-            println "  ✓ Asset Name : ${assetName}"
+            println "MATCH : Asset Name"
+            println "VALUE : ${assetName}"
         }
     }
 
-    // Check metadata
-    if (asset.hasNode("jcr:content/metadata")) {
+    // Metadata
+    if(asset.hasNode("jcr:content")) {
 
-        def metadata = asset.getNode("jcr:content/metadata")
+        def jc = asset.getNode("jcr:content")
 
-        properties.each { propertyName ->
+        if(jc.hasNode("metadata")) {
 
-            if (metadata.hasProperty(propertyName)) {
+            def metadata = jc.getNode("metadata")
 
-                def prop = metadata.getProperty(propertyName)
+            metadata.getProperties().each { Property prop ->
 
-                def values = prop.multiple ?
-                        prop.values.collect { it.string } :
-                        [prop.string]
+                try {
 
-                values.each { value ->
+                    if(prop.getDefinition().isMultiple()) {
 
-                    if (value == null) return
+                        prop.getValues().each { v ->
 
-                    searchTokens.each { token ->
+                            String value = v.getString()
 
-                        if (value.toLowerCase().contains(token)) {
+                            searchTokens.each { token ->
 
-                            found = true
+                                if(value &&
+                                   value.toLowerCase().contains(token)) {
 
-                            println "  ✓ Property : ${propertyName}"
-                            println "    Matched  : ${token}"
-                            println "    Value    : ${value}"
+                                    found = true
+
+                                    println "MATCH : ${prop.getName()}"
+                                    println "VALUE : ${value}"
+                                    println()
+                                }
+                            }
                         }
+
+                    } else {
+
+                        String value = prop.getString()
+
+                        searchTokens.each { token ->
+
+                            if(value &&
+                               value.toLowerCase().contains(token)) {
+
+                                found = true
+
+                                println "MATCH : ${prop.getName()}"
+                                println "VALUE : ${value}"
+                                println()
+                            }
+                        }
+
                     }
+
+                } catch(Exception e) {
+                    // Ignore binary or unsupported properties
                 }
+
             }
         }
     }
 
-    if (!found) {
-        println "  >>> No metadata match found."
+    if(!found) {
+        println ">>> No obvious metadata match found."
     }
 
-    println "----------------------------------------------------"
+    println "------------------------------------------------------------"
 }
