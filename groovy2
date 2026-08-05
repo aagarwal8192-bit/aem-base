@@ -1,53 +1,43 @@
 import com.day.cq.search.PredicateGroup
 import com.day.cq.search.Query
 import com.day.cq.search.QueryBuilder
-import com.day.cq.search.result.Hit
 import com.day.cq.search.result.SearchResult
 import javax.jcr.Session
 
-// resourceResolver is injected by the Groovy Console binding
-Session session = resourceResolver.adaptTo(Session.class)
-QueryBuilder builder = resourceResolver.adaptTo(QueryBuilder.class)
+try {
+    Session session = resourceResolver.adaptTo(Session.class)
+    println "Session: " + session
 
-// --- Rebuild the same predicates as your Query Builder Debugger screenshot ---
-Map<String, String> map = new HashMap<>()
-map.put("path", "/content/dam/seagate/brand-portal")
-map.put("type", "dam:Asset")
-map.put("fulltext", "Backup Plus")
-map.put("2_group.0_path", "/content/dam/seagate/brand-portal")
-map.put("2_group.p.or", "true")
-map.put("4_group.property", "jcr:content/contentFragment")
-map.put("4_group.property.operation", "not")
-map.put("5_group.mainasset", "true")
-map.put("orderby", "@jcr:content/jcr:lastModified")
-map.put("orderby.sort", "desc")
-map.put("p.limit", "20")
-map.put("p.offset", "60")
+    QueryBuilder builder = resourceResolver.adaptTo(QueryBuilder.class)
+    println "Builder: " + builder
 
-// --- Enable excerpts so we can see WHAT matched ---
-map.put("excerpt", "true")
-map.put("p.hits", "full")   // required for getExcerpt()/getExcerptPath() to work
+    Map<String, String> map = new HashMap<>()
+    map.put("path", "/content/dam/seagate/brand-portal")
+    map.put("type", "dam:Asset")
+    map.put("fulltext", "Backup Plus")
+    map.put("2_group.0_path", "/content/dam/seagate/brand-portal")
+    map.put("2_group.p.or", "true")
+    map.put("4_group.property", "jcr:content/contentFragment")
+    map.put("4_group.property.operation", "not")
+    map.put("5_group.mainasset", "true")
+    map.put("orderby", "@jcr:content/jcr:lastModified")
+    map.put("orderby.sort", "desc")
+    map.put("p.limit", "20")
+    map.put("p.offset", "60")
+    map.put("excerpt", "true")
+    map.put("p.hits", "full")
 
-Query query = builder.createQuery(PredicateGroup.create(map), session)
-SearchResult result = query.getResult()
+    Query query = builder.createQuery(PredicateGroup.create(map), session)
+    println "Query created: " + query
 
-println "Total hits: " + result.getTotalMatches()
-println "====================================="
+    SearchResult result = query.getResult()
+    println "Result: " + result
 
-result.getHits().each { Hit hit ->
-    String path = hit.getPath()
-    String excerpt = hit.getExcerpt()          // HTML snippet, matched term(s) wrapped in <strong>
-    String excerptPath = hit.getExcerptPath()  // which property matched (e.g. jcr:content/metadata/dc:title)
+    println "Total matches: " + result.getTotalMatches()
 
-    println "Asset: ${path}"
-    println "Matched property: ${excerptPath}"
-    println "Excerpt: ${excerpt}"
-
-    // Pull out just the highlighted term(s) from the excerpt HTML
-    if (excerpt) {
-        def matches = (excerpt =~ /<strong>(.*?)<\/strong>/)
-        def terms = matches.collect { it[1] }.unique()
-        println "Matched term(s): ${terms}"
-    }
-    println "-------------------------------------"
+} catch (Throwable t) {
+    println "ERROR: " + t.class.name + " - " + t.message
+    def sw = new StringWriter()
+    t.printStackTrace(new PrintWriter(sw))
+    println sw.toString()
 }
