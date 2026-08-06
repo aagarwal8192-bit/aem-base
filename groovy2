@@ -2,42 +2,66 @@ import com.day.cq.search.PredicateGroup
 import com.day.cq.search.Query
 import com.day.cq.search.QueryBuilder
 import com.day.cq.search.result.SearchResult
-import javax.jcr.Session
+import com.day.cq.search.result.Hit
 
-try {
-    Session session = resourceResolver.adaptTo(Session.class)
-    println "Session: " + session
+def resourceResolver = resourceResolver
+def session = resourceResolver.adaptTo(javax.jcr.Session.class)
+def builder = resourceResolver.adaptTo(QueryBuilder.class)
 
-    QueryBuilder builder = resourceResolver.adaptTo(QueryBuilder.class)
-    println "Builder: " + builder
+Map<String, String> map = [:]
+map.put("path", "/content/dam/seagate/brand-portal")
+map.put("fulltext", "Backup Plus")
+map.put("type", "dam:Asset")
+map.put("orderby", "@jcr:content/jcr:lastModified")
+map.put("orderby.sort", "desc")
+map.put("p.limit", "20")
+map.put("p.offset", "60")
 
-    Map<String, String> map = new HashMap<>()
-    map.put("path", "/content/dam/seagate/brand-portal")
-    map.put("type", "dam:Asset")
-    map.put("fulltext", "Backup Plus")
-    map.put("2_group.0_path", "/content/dam/seagate/brand-portal")
-    map.put("2_group.p.or", "true")
-    map.put("4_group.property", "jcr:content/contentFragment")
-    map.put("4_group.property.operation", "not")
-    map.put("5_group.mainasset", "true")
-    map.put("orderby", "@jcr:content/jcr:lastModified")
-    map.put("orderby.sort", "desc")
-    map.put("p.limit", "20")
-    map.put("p.offset", "60")
-    map.put("excerpt", "true")
-    map.put("p.hits", "full")
+// --- Enable excerpts so we can see WHAT matched ---
+map.put("excerpt", "true")
+map.put("p.hits", "full")   // required for getExcerpt()/getExcerpts() to work
 
-    Query query = builder.createQuery(PredicateGroup.create(map), session)
-    println "Query created: " + query
+Query query = builder.createQuery(PredicateGroup.create(map), session)
+SearchResult result = query.getResult()
 
-    SearchResult result = query.getResult()
-    println "Result: " + result
+println "Total hits: " + result.getTotalMatches()
+println "========================================"
 
-    println "Total matches: " + result.getTotalMatches()
+result.getHits().each { Hit hit ->
+    String path = hit.getPath()
 
-} catch (Throwable t) {
-    println "ERROR: " + t.class.name + " - " + t.message
-    def sw = new StringWriter()
-    t.printStackTrace(new PrintWriter(sw))
-    println sw.toString()
+    println "Asset: ${path}"
+
+    // getExcerpts() returns a Map<String, String>:
+    //   key   = the property path that matched (e.g. jcr:content/metadata/dc:title)
+    //   value = HTML excerpt for that property, matched term(s) wrapped in <strong>
+    Map<String, String> excerpts = hit.getExcerpts()
+
+    if (excerpts && !excerpts.isEmpty()) {
+        excerpts.each { String propPath, String excerptHtml ->
+            println "  Matched property: ${propPath}"
+            println "  Excerpt: ${excerptHtml}"
+
+            // Pull out just the highlighted term(s) from this property's excerpt HTML
+            def matches = (excerptHtml =~ /<strong>(.*?)<\/strong>/)
+            def terms = matches.collect { it[1] }.unique()
+            println "  Matched term(s): ${terms}"
+            println "  ---"
+        }
+    } else {
+        // Fallback: some hits (e.g. matches only on binary/fulltext body, not a
+        // specific indexed property) may only populate the combined excerpt.
+        String excerpt = hit.getExcerpt()
+        if (excerpt) {
+            println "  (No per-property excerpts; combined excerpt below)"
+            println "  Excerpt: ${excerpt}"
+            def matches = (excerpt =~ /<strong>(.*?)<\/strong>/)
+            def terms = matches.collect { it[1] }.unique()
+            println "  Matched term(s): ${terms}"
+        } else {
+            println "  (No excerpt available for this hit)"
+        }
+    }
+
+    println "----------------------------------------"
 }
