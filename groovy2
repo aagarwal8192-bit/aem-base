@@ -1,67 +1,55 @@
-import com.day.cq.search.PredicateGroup
-import com.day.cq.search.Query
-import com.day.cq.search.QueryBuilder
-import com.day.cq.search.result.SearchResult
-import com.day.cq.search.result.Hit
+import javax.jcr.Node
+import javax.jcr.NodeIterator
+import javax.jcr.Property
+import javax.jcr.Session
 
 def resourceResolver = resourceResolver
-def session = resourceResolver.adaptTo(javax.jcr.Session.class)
-def builder = resourceResolver.adaptTo(QueryBuilder.class)
+Session session = resourceResolver.adaptTo(Session.class)
 
-Map<String, String> map = [:]
-map.put("path", "/content/dam/seagate/brand-portal")
-map.put("fulltext", "Backup Plus")
-map.put("type", "dam:Asset")
-map.put("orderby", "@jcr:content/jcr:lastModified")
-map.put("orderby.sort", "desc")
-map.put("p.limit", "20")
-map.put("p.offset", "60")
+String indexPath = "/oak:index/damAssetLucene"
 
-// --- Enable excerpts so we can see WHAT matched ---
-map.put("excerpt", "true")
-map.put("p.hits", "full")   // required for getExcerpt()/getExcerpts() to work
+if (!session.itemExists(indexPath)) {
+    println "Index not found at ${indexPath}"
+    return
+}
 
-Query query = builder.createQuery(PredicateGroup.create(map), session)
-SearchResult result = query.getResult()
+Node indexNode = session.getNode(indexPath)
+println "Scanning index: ${indexPath}"
+println "=========================================="
 
-println "Total hits: " + result.getTotalMatches()
-println "========================================"
+List<String> suggestProps = []
 
-result.getHits().each { Hit hit ->
-    String path = hit.getPath()
-
-    println "Asset: ${path}"
-
-    // getExcerpts() returns a Map<String, String>:
-    //   key   = the property path that matched (e.g. jcr:content/metadata/dc:title)
-    //   value = HTML excerpt for that property, matched term(s) wrapped in <strong>
-    Map<String, String> excerpts = hit.getExcerpts()
-
-    if (excerpts && !excerpts.isEmpty()) {
-        excerpts.each { String propPath, String excerptHtml ->
-            println "  Matched property: ${propPath}"
-            println "  Excerpt: ${excerptHtml}"
-
-            // Pull out just the highlighted term(s) from this property's excerpt HTML
-            def matches = (excerptHtml =~ /<strong>(.*?)<\/strong>/)
-            def terms = matches.collect { it[1] }.unique()
-            println "  Matched term(s): ${terms}"
-            println "  ---"
-        }
-    } else {
-        // Fallback: some hits (e.g. matches only on binary/fulltext body, not a
-        // specific indexed property) may only populate the combined excerpt.
-        String excerpt = hit.getExcerpt()
-        if (excerpt) {
-            println "  (No per-property excerpts; combined excerpt below)"
-            println "  Excerpt: ${excerpt}"
-            def matches = (excerpt =~ /<strong>(.*?)<\/strong>/)
-            def terms = matches.collect { it[1] }.unique()
-            println "  Matched term(s): ${terms}"
-        } else {
-            println "  (No excerpt available for this hit)"
+// Recursively walk the index tree looking for nodes that have a
+// "useInSuggest" property set to true (these live under
+// indexRules/<nodeType>/properties/<propName>)
+def walk
+walk = { Node node, String path ->
+    if (node.hasProperty("useInSuggest")) {
+        Property prop = node.getProperty("useInSuggest")
+        boolean value = prop.getBoolean()
+        if (value) {
+            // try to get the actual property name being indexed, if present
+            String indexedPropName = node.hasProperty("name") ? node.getProperty("name").getString() : node.getName()
+            suggestProps.add("${path}  (indexes property: ${indexedPropName})")
         }
     }
 
-    println "----------------------------------------"
+    NodeIterator children = node.getNodes()
+    while (children.hasNext()) {
+        Node child = children.nextNode()
+        walk(child, "${path}/${child.getName()}")
+    }
 }
+
+walk(indexNode, indexPath)
+
+println "Properties with useInSuggest = true:"
+println "--------------------------------------------"
+if (suggestProps.isEmpty()) {
+    println "  None found."
+} else {
+    suggestProps.each { println "  ${it}" }
+}
+
+println "=========================================="
+println "Total found: ${suggestProps.size()}"
